@@ -5,6 +5,8 @@ A browser-based emulation tool for Twilio Media Streams that lets developers tes
 This emulator allows you to connect to a media stream server directly from your browser, simulating Twilio's role in handling audio streams for phone calls.
 It provides a straightforward way to test and develop Twilio-powered applications without incurring costs or requiring physical hardware.
 
+![](/docs/preview.jpg)
+
 ### Features
 * **Browser-based phone emulation:** Test calls directly from your development environment
 * **Real-time audio streaming:** Connect to your Media Streams application server
