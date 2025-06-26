@@ -38,3 +38,7 @@ The interface provides simple controls to:
 ## TODO
 Future enhancements to be added:
 [] Add muting support
+[] Add support for DTMF messages
+
+## License
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
