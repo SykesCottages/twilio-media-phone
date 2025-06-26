@@ -1,3 +1,8 @@
+/**
+ * Audio Worklet Processor for encoding audio to µ-law format
+ * This processor handles incoming audio data, encodes it to µ-law format,
+ * and outputs the encoded audio data.
+ */
 class ULawProcessor extends AudioWorkletProcessor {
     process(inputs, outputs, parameters) {
         const input = inputs[0];

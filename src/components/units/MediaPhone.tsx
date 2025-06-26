@@ -55,6 +55,7 @@ export const MediaPhone = () => {
     const pendingMarksRef = useRef<Set<string>>(new Set());
     const currentSourceRef = useRef<AudioBufferSourceNode|null>(null);
     const pendingMarkFromServerRef = useRef<string|null>(null);
+    const ulawDecoderNodeRef = useRef<AudioWorkletNode|null>(null);
     const [isPlaying, setIsPlaying] = useState<boolean>(false);
 
     /**
@@ -146,6 +147,13 @@ export const MediaPhone = () => {
             currentSourceRef.current = null;
         }
 
+        if (ulawDecoderNodeRef.current) {
+            ulawDecoderNodeRef.current.port.postMessage({
+                type: 'clear'
+            });
+            addLog('Sent clear message to audio worklet', 'info');
+        }
+
         pendingMarksRef.current.forEach(markName => {
             _sendMessageToClient(
                 'mark',
@@ -166,101 +174,22 @@ export const MediaPhone = () => {
         setIsPlaying(false);
     }
 
-    const createAudioBuffer = (pcmData: Int16Array, sampleRate: number = 8000): AudioBuffer|null => {
-        if (!audioContextRef.current) return null;
-
-        const audioBuffer = audioContextRef.current.createBuffer(1, pcmData.length, sampleRate);
-        const channelData = audioBuffer.getChannelData(0);
-
-        // Convert Int16 PCM data to Float32 and normalize
-        for (let i = 0; i < pcmData.length; i++) {
-            channelData[i] = pcmData[i] / 32768.0;
-        }
-
-        return audioBuffer;
-    }
-
-    const playNextAudioBuffer = () => {
-        if (!audioContextRef.current || audioBufferQueueRef.current.length === 0) {
-            setIsPlaying(false);
-            return;
-        }
-
-        const queuedItem = audioBufferQueueRef.current.shift()!;
-        const {audioBuffer, markName} = queuedItem;
-
-        const source = audioContextRef.current.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContextRef.current.destination)
-        currentSourceRef.current = source;
-
-        const currentTime = audioContextRef.current.currentTime;
-        const startTime = Math.max(currentTime, nextStartTimeRef.current);
-
-        source.start(startTime);
-        nextStartTimeRef.current = startTime + audioBuffer.duration;
-
-        setIsPlaying(true);
-
-        // Handle end of playback
-        source.onended = () => {
-            currentSourceRef.current = null;
-
-            if (markName) {
-                _sendMessageToClient(
-                    'mark',
-                    {
-                        event: 'mark',
-                        streamSid: streamSidRef.current,
-                        sequenceNumber: Date.now().toString(),
-                        mark: {
-                            name: markName
-                        }
-                    }
-                )
-                pendingMarksRef.current.delete(markName);
-            }
-
-            if (audioBufferQueueRef.current.length === 0) {
-                setIsPlaying(false);
-            }
-
-            playNextAudioBuffer()
-        }
-    }
-
-    const playAudioBuffer = (audioBuffer: AudioBuffer, markName: string|null) => {
-        if (!audioContextRef.current) return;
-
-        const queuedItem: QueuedAudioItem = {
-            audioBuffer,
-            markName: markName || ''
-        }
-
-        audioBufferQueueRef.current.push(queuedItem);
-
-        if (markName) {
-            pendingMarksRef.current.add(markName)
-        }
-
-        // Start playing if not already
-        if (!isPlaying && !currentSourceRef.current) {
-            playNextAudioBuffer();
-        }
-    }
-
     const processMediaMessage = (message: MediaMessage) => {
         try {
             const muLawData = base64ToUint8Array(message.media.payload);
-            const pcmData = decodeMuLawToPCM(muLawData);
-
-            const audioBuffer = createAudioBuffer(pcmData);
-
-            if (audioBuffer) {
-                const markName = pendingMarkFromServerRef.current
+            
+            if (ulawDecoderNodeRef.current) {
+                const markName = pendingMarkFromServerRef.current;
                 pendingMarkFromServerRef.current = null;
-
-                playAudioBuffer(audioBuffer, markName);
+                
+                // Send to decoder processor node
+                ulawDecoderNodeRef.current.port.postMessage({
+                    type: 'decode',
+                    ulawData: muLawData,
+                    markName,
+                    sequenceNumber: message.sequenceNumber || message.media.chunk
+                });
+                addLog(`Queued ${muLawData.length} bytes in decoder worklet`, 'info');
             }
         } catch (error: any) {
             addLog(`Error processing media message: ${error.message}`, 'error');
@@ -294,16 +223,17 @@ export const MediaPhone = () => {
             }
 
             await audioContextRef.current.audioWorklet.addModule('worklet/ulaw-processor.js');
+            await audioContextRef.current.audioWorklet.addModule('worklet/ulaw-decoder-processor.js');
+            addLog('Audio worklet processors loaded', 'info');
 
             const source = audioContextRef.current.createMediaStreamSource(stream)
-            const workletNode = new AudioWorkletNode(audioContextRef.current, 'ulaw-processor');
+            const encoderWorkletNode = new AudioWorkletNode(audioContextRef.current, 'ulaw-processor');
 
-            workletNode.port.onmessage = (event: MessageEvent) => {
+            encoderWorkletNode.port.onmessage = (event: MessageEvent) => {
                 if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN && streamSidRef.current) {
                     const ulawBytes: Uint8Array = event.data;
                     const base64 = btoa(String.fromCharCode(...ulawBytes))
 
-                    // TODO: Send to websocket connection.
                     _sendMessageToClient('media', {
                         sequenceNumber: sequenceNumberRef.current++,
                         media: {
@@ -316,8 +246,48 @@ export const MediaPhone = () => {
                 }
             }
 
-            source.connect(workletNode).connect(audioContextRef.current.destination);
+            // Output processing decoder
+            const decoderWorkletNode = new AudioWorkletNode(audioContextRef.current, 'ulaw-decoder-processor', {
+                numberOfInputs: 0,
+                numberOfOutputs: 1,
+                outputChannelCount: [1]
+            });
+            ulawDecoderNodeRef.current = decoderWorkletNode;
+            
+            // Connect the decoder directly to the audio output
+            decoderWorkletNode.connect(audioContextRef.current.destination);
+            
+            decoderWorkletNode.port.onmessage = (event: MessageEvent) => {
+                if (event.data.type === 'bufferProcessed') {
+                    const { markName } = event.data;
+                    
+                    if (markName) {
+                        _sendMessageToClient(
+                            'mark',
+                            {
+                                event: 'mark',
+                                streamSid: streamSidRef.current,
+                                sequenceNumber: Date.now().toString(),
+                                mark: {
+                                    name: markName
+                                }
+                            }
+                        );
+                        addLog(`Mark processed: ${markName}`, 'success');
+                    }
+                } else if (event.data.type === 'bufferQueued') {
+                    if (event.data.queueLength > 5) {
+                        addLog(`Audio queue length: ${event.data.queueLength}`, 'info');
+                    }
+                } else if (event.data.type === 'cleared') {
+                    addLog('Audio worklet buffers cleared', 'info');
+                }
+            };
+            
+            // Connect encoder to audio output
+            source.connect(encoderWorkletNode).connect(audioContextRef.current.destination);
 
+            addLog('Audio processing pipeline set up', 'success');
             nextStartTimeRef.current = audioContextRef.current.currentTime;
 
             return true;
@@ -552,6 +522,8 @@ export const MediaPhone = () => {
             }
         }
 
+        ulawDecoderNodeRef.current = null;
+        
         if (audioContextRef.current) {
             try {
                 audioContextRef.current.close();
