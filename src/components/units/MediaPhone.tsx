@@ -103,31 +103,6 @@ export const MediaPhone = () => {
     /**
      * == ULAW HANDLING FUNCS ==
      */
-    const initMuLawTable = () => {
-        if (muLawDecodeTable.current) return;
-
-        const table = new Int16Array(256);
-        for (let i = 0; i < 256; i++) {
-            let val = ~i;
-            let t = ((val & 0x0F) << 3) + 0x84;
-            t <<= (val & 0x70) >> 4;
-            table[i] = val & 0x80 ? 0x84 - t : t - 0x84;
-        }
-        muLawDecodeTable.current = table;
-    };
-
-    const decodeMuLawToPCM = (muLawData: Uint8Array): Int16Array => {
-        if (!muLawDecodeTable.current) {
-            initMuLawTable();
-        }
-
-        const pcmData = new Int16Array(muLawData.length);
-        for (let i = 0; i < muLawData.length; i++) {
-            pcmData[i] = muLawDecodeTable.current![muLawData[i]];
-        }
-        return pcmData;
-    };
-
     const base64ToUint8Array = (base64: string): Uint8Array => {
         const binaryString = atob(base64);
         const bytes = new Uint8Array(binaryString.length);

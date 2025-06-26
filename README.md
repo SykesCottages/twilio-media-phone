@@ -20,6 +20,7 @@ It provides a straightforward way to test and develop Twilio-powered application
 * ShadCN UI
 * Tailwind CSS
 * WebSocket for real-time communication
+* [AudioWorkletProcessor](https://developer.mozilla.org/en-US/docs/Web/API/AudioWorkletProcessor) for real-time audio processing
 
 ## Getting Started
 1. Clone this repository
@@ -37,8 +38,9 @@ The interface provides simple controls to:
 
 ## TODO
 Future enhancements to be added:
-[] Add muting support
-[] Add support for DTMF messages
+- [] Add muting support
+- [] Add support for DTMF messages
+- [] Add twilio request connection signature header
 
 ## License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
